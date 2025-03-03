@@ -1,10 +1,12 @@
  .SYNOPSIS
+ 
   Provides extended visibility of Hubitat Elevation devices spread across multiple hubs on one 
   pane of glass. Devices shared between hubs with Hub Mesh can be displayed with their source/
   remote relationships, complete with "In Use By" information for each device, and hyperlinks.
   Output is available to screen, HTML or CSV.
 
   .DESCRIPTION
+  
   HEDevicesToolKit.ps1 brings together devices from multiple Hubitat Elevation hubs to provide 
   visibility of all these devices from one source.
   The script uses web endpoints to query each hub and from that builds a database of devices 
@@ -27,6 +29,7 @@
   Microsoft Excel.
 
   ******** Issues Detection ********
+  
   HEDevicesToolKit can identify the following issues:
   * Low battery charge - Checks all devices with the attribute 'battery' and reports on 
     devices that have a charge lower than the set threshold (user configurable).
@@ -41,6 +44,7 @@
     that do not have any remote devices.
   
   ******** Files ********
+  
   The following files are by default located in the same folder as HEDevicesToolKit.ps1:
   * HEDevicesToolKit.ps1 - This file.
   * Hubs.txt - Can be used to provide HEDevicesTooLkit.ps1 with a list of Hubitat Elevation hub
@@ -66,6 +70,7 @@
     name and path.
 
   ******** Configuration Settings ********
+  
   Configuration settings can only be accessed in interactive mode, but is used for both 
   interactive and non-interactive modes. The following settings are available:
   * autoLaunchWebBrowser - When True and outputDevice is HTML, the web browser will be 
