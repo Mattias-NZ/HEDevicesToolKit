@@ -5,6 +5,7 @@
   remote relationships, complete with "In Use By" information for each device, and hyperlinks.
   Output is available to screen, HTML or CSV.
 
+
   .DESCRIPTION
   
   HEDevicesToolKit.ps1 brings together devices from multiple Hubitat Elevation hubs to provide 
@@ -28,6 +29,7 @@
   complete dataset with the possibility of further analysis using external tools, such as 
   Microsoft Excel.
 
+
   ******** Issues Detection ********
   
   HEDevicesToolKit can identify the following issues:
@@ -42,6 +44,7 @@
     devices that have been disabled but still have remote devices on other hubs.
   * Hub Mesh - No remote devices - Checks all Hub Mesh devices to identify any source devices
     that do not have any remote devices.
+
   
   ******** Files ********
   
@@ -68,6 +71,7 @@
     devices" or "Search for Hub Mesh devices". Configurable name and path.
   * IssuesList.csv - Contains the output from the last run of "List all hubs". Configurable
     name and path.
+
 
   ******** Configuration Settings ********
   
@@ -112,10 +116,12 @@
 
     
   .PARAMETER NonInteractive
+  
   Is required for running HEDevicesToolKit.ps1 in non-interactive mode. None of the other 
   parameters will work without including this one.
 
   .PARAMETER RunNewScan
+  
   Used together with -NonInteractive. Starts a new scan of devices. If the parameter is not 
   set, HEDevicesToolKit.ps1 will use data from the last time the scan was performed. 
   When running the scan, HEDevicesToolKit.ps1 will firstly look for Hubitat Elevation hub IP 
@@ -125,29 +131,35 @@
   scan options.
 
   .PARAMETER HubIPAddress
+  
   Used together with -NonInteractive and -RunNewScan. Expects a comma separated list of IP 
   addresses to the Hubitat Elevation hubs to be scanned.
   
   .PARAMETER ListAllDevices
+  
   Used together with -NonInteractive. Provides a list of all devices loaded to the configured 
   output device(s). Parent/child relationship between devices is clearly and intuitively shown 
   as well as In Use By apps and other status information.
   
   .PARAMETER ListAllHubs
+  
   Used together with -NonInteractive. Provides a list of all hubs loaded to the configured 
   output device(s).
   
   .PARAMETER ListAllHubMeshDevices
+  
   Used together with -NonInteractive. Provides a list of all Hub Mesh devices loaded to the 
   configured output device(s). Source/remote device relationship between devices is clearly 
   and intuitively shown as well as In Use By apps and other status information.
   
   .PARAMETER CheckForDeviceIssues
+  
   Used together with -NonInteractive. Checks all loaded devices for a range of possible issues 
   and provides a list of these to the configured output device(s). Provides an explaination of 
   each category of issues and possible ways of rectifying the issue.
   
   .PARAMETER SearchForDeviceByName
+  
   Used together with -NonInteractive. Will perform a search of devices by name for the search 
   term provided in the optional -SearchTerm <String> parameter and provide a list of search 
   results to the configured output device(s). The search performs a wildcard search of the 
@@ -155,6 +167,7 @@
   containing "switch" and "with" in their names.
   
   .PARAMETER SearchForHubMeshDeviceByName
+  
   Used together with -NonInteractive. Will perform a search of Hub Mesh devices by name for 
   the search term provided in the optional -SearchTerm <String> parameter and provide a list 
   of search results to the configured output device(s). The search performs a wildcard search 
@@ -162,6 +175,7 @@
   containing "switch" and "with" in their names.
   
   .PARAMETER SearchTerm
+  
   Used together with -NonInteractive and -SearchForDeviceByName and/or 
   -SearchForHubMeshDeviceByName. Expects a string of the search term to be used for searching. 
   If the parameter is omitted, HEDevicesToolKit.ps1 will ask for a search term when running.
@@ -169,18 +183,22 @@
   
 
   .INPUTS
+  
   None. You can't pipe objects to HEDevicesToolKit.ps1.
 
   .OUTPUTS
+  
   Optional. HEDevicesToolKit.ps1 outputs to screen and/or HTML file and/or CSV file, depending 
   on what has been configured.
 
   .EXAMPLE
+  
   PS> .\HEDevicesToolKit.ps1
 
   Starts HEDevicesToolKit.ps1 in interactive mode.
 
   .EXAMPLE
+  
   PS> .\HEDevicesToolKit.ps1 -NonInteractive -RunNewScan
 
   Starts a new non-interactive scan using the Hubitat Elevation hub IP addresses found in the
@@ -188,12 +206,14 @@
   prompt for IP addresses to scan.
 
   .EXAMPLE
+  
   PS> .\HEDevicesToolKit.ps1 -NonInteractive -RunNewScan -HubIPAddress "192.168.1.1","192.168.1.88"
 
   Starts a new non-interactive scan using the Hubitat Elevation hub IP addresses of 
   "192.168.1.1" and "192.168.1.88"
 
   .EXAMPLE
+  
   PS> .\HEDevicesToolKit.ps1 -NonInteractive -RunNewScan -HubIPAddress "192.168.1.1","192.168.1.88" 
        -CheckForDeviceIssues -ListAllHubMeshDevices -ListAllDevices
 
@@ -202,6 +222,7 @@
   devices and a list of all devices
 
   .EXAMPLE
+  
   PS> .\HEDevicesToolKit.ps1 -NonInteractive -CheckForDeviceIssues -ListAllHubMeshDevices 
        -ListAllDevices
 
@@ -209,6 +230,7 @@
   a list of all Hub Mesh devices and a list of all devices
 
   .EXAMPLE
+  
   PS> .\HEDevicesToolKit.ps1 -NonInteractive -SearchForDeviceByName -SearchTerm "Contact Sensor"
 
   Uses data stored on disk from a previous scan and performs a search for devices with 
