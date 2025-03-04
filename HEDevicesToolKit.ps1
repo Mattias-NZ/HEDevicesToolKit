@@ -88,7 +88,7 @@
   * inactivityThresholdMinutes - The threshold in minutes after which a device will be 
     considered being inactive. The default is 1440 minutes (1 day).
   * internetProtocol - The Internet protocol used when accessing the Hubitat Elevation hubs.
-    The default is "http://", but can be changed to "https://"
+    The default is "https://", but can be changed to "http://"
   * lowBatteryChargeThreshold - The threshold in % below which a device will be reported as 
     having a low battery charge. The default is 20%.
   * outputDevice - Which output will be used for the output from HEDevicesToolKit.ps1. Any 
@@ -213,54 +213,16 @@
   .NOTES
   Author: Mattias Salomonsson
   License type: GNU AGPL v3.0
+
+  System requirements:
+  PowerShell 5.1 or newer
+  Hubitat Elevation platform version 2.3.9 or newer
   
   ---Release Notes---
-  2025.03.04.0119
-  Added licensing info to the NOTES section
+  2025.03.04.1826
+  First public version
 
-  2025.03.04.0039
-  Added CSV file as output device.
-  Added another option to the 'Devices Excluded From Issues Reporting' feature to add all 
-  current devices with issues to the exclusion list.
-  Bug fixes:
-  * Resolved issue where CSV and HTML files were generated while displaying the device issue 
-  list with the purpose of excluding devices from the list.
-
-  2025.03.03.0119
-  Fixed bug with valid menu option number algorithm
-  Added detail to Device Issues list that displays the number of devices with detected issues 
-  that have been excluded from the list.
-  Added setting 'Change file names or paths' where the filenames and paths of all output files 
-  can be changed from their default settings.
-  If hubs.txt is missing, HEDevicesToolKit.ps1 will now create the file. Added mechanism to 
-  allow for comments in hubs.txt.
-
-  2025.03.01.2150
-  Added functionality and setting 'Devices Excluded From Issues Reporting'. This setting can be  
-  used to exclude a device from the device issues checking and reporting function.
-
-  2025.03.01.0241
-  Added functionality and setting 'Send Web Call On Issue'. A web call URL can be configured for 
-  each and every issue category that can be detected by the HEDevicesToolKit.ps1, and on 
-  detection of an issue, a web call to the specified URL will take place.
-
-  2025.02.26.0114
-  Added setting 'internetProtocol' to allow the user to set which Internet Protocol to use for 
-  their hubs. When using https, HEDevicesToolKit.ps1 will ignore all SSL certificate errors.
-
-  2025.02.25.1137
-  Added functionality to WriteMenuToHost so that a menu item now will wrap to the next line if
-  longer than the maximum length of the table.
-
-  2025.02.23.0235
-  Added list of files and configuration settings to the help section.
-  Added the autoLaunchWebBrowser feature which will automatically launch the default web 
-  browser when output is produced and HTML is selected as the output device.
-
-  2025.02.23.0007
-  Added Help section to the file. 
-  Added version numbering and display of version number when running the script.
-
+  
 
   ----------------------------
 
@@ -279,56 +241,68 @@ param (
     [switch]$SearchForHubMeshDeviceByName,
     [string]$SearchTerm
 )
-$Version = "2025.03.04.0119"
+$Version = "2025.03.04.1826"
 
 function ScanForData { #Takes an array of hub IP addresses as the input and queries them and their devices for data. Wipes existing data
     param (
         [string[]]$HubIPAddressList
     )
     
-    $HubCount = $HubIPAddressList.Count
-    if ($HubCount -ge 1) {
-        $script:DataHashTable.hubs = [ordered]@{}
-        $script:DataHashTable.devices = [ordered]@{}
-        $script:DataHashTable.apps = [ordered]@{}
-        $script:DataHashTable.hubMeshSourceDevices = @{}
-        if ($script:DataHashTable.config.count -lt 1) { #$script:DataHashTable.config has not been declared yet, so let's do that
-            $script:DataHashTable.config = @{}
-        }
-        $script:DataHashTable.config.deviceListLastUpdated = ""
-        
+    $AddressCount = $HubIPAddressList.Count
+    if ($AddressCount -ge 1) {
         Write-Host
         
         $i = 0
+        $ValidHEAddressFound = $false
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLHandler]::GetSSLHandler() #Ignore all SSL cert issues
         foreach ($HubIPAddress in $HubIPAddressList) {
             $i++
-            Write-Host ("Getting hub details from IP address '{0}' (address {1} of {2})" -f (($HubIPAddress),($i),($HubCount)))
-            if (ValidateHubIPAddress -IPaddress $HubIPAddress) {
-                $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $HubIPAddress + "/hub/details/json")).Content | ConvertFrom-Json
+            $ValidatedAddress = ValidateHubIPAddress -IPaddress $HubIPAddress
+            if ($ValidatedAddress) {
+                Write-Host ("Getting hub details from IP address '{0}' (address {1} of {2})" -f (($ValidatedAddress),($i),($AddressCount)))
+                if (-NOT $ValidHEAddressFound) { #This is the first address found that appears to be a valid HE hub address. Let's destroy previously loaded data now
+                    $script:DataHashTable.hubs = [ordered]@{}
+                    $script:DataHashTable.devices = [ordered]@{}
+                    $script:DataHashTable.apps = [ordered]@{}
+                    $script:DataHashTable.hubMeshSourceDevices = @{}
+                    $script:DataHashTable.config.deviceListLastUpdated = ""
+                }
+                $ValidHEAddressFound = $true
+                $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json")).Content | ConvertFrom-Json
                 
-                $script:DataHashTable.hubs.Add($HubIPAddress,[ordered]@{    hubName = $HubDetails.hubName
-                                                                            hubIPAddress = $HubIPAddress
-                                                                            hubURL = $HubIPAddress
+                $script:DataHashTable.hubs.Add($ValidatedAddress,[ordered]@{    hubName = $HubDetails.hubName
+                                                                            hubIPAddress = $ValidatedAddress
+                                                                            hubURL = $ValidatedAddress
                                                                             platformVersion = $HubDetails.platformVersion
                                                                             hardwareVersion = $HubDetails.hardwareVersion
                 })
 
                 Write-Host ("{0} found. Getting device data" -f ($HubDetails.hubName))
-                $URL = $script:DataHashTable.config.internetProtocol + $HubIPAddress + "/hub2/devicesList"
-                ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL).Content).devices) $HubIPAddress
+                $URL = $script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub2/devicesList"
+                ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL).Content).devices) $ValidatedAddress
                 Write-Host 
                 $script:DataHashTable.config.deviceListLastUpdated = (Get-Date).DateTime
                 SortDataHashTableByName
                 WriteDataToDisk
                 Write-Host "Done"
             } else {
+                Write-Host ("Getting hub details from IP address '{0}' (address {1} of {2})" -f (($HubIPAddress),($i),($AddressCount)))
                 Write-Host "Invalid IP address or no HE hub detected on address. Skipping." -ForegroundColor "Red"
             }
             Write-Host
             
         }
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null #Stop ignoring SSL cert issues
+        if (-NOT $ValidHEAddressFound) { #No valid HE hub address was found, so no new devices were ever scanned, and the old data was never removed.
+            Write-Host
+            Write-Host "No valid Hubitat Elevation hub IP addresses were found. No new scan has taken place." -ForegroundColor "Red"
+            if ($script:DataHashTable.config.deviceListLastUpdated) {
+                Write-Host "The data that was already present before attempting to run the scan is intact."
+            }
+            if (-not $NonInteractive) {
+                Write-Host
+            }
+        }
 
     }
 }
@@ -434,7 +408,7 @@ function ScanDevice { #Called from ScanForData to query each found device for da
     }
 }
 
-function ValidateHubIPAddress { #Validates provided IP address. Checks that the address is valid and that there is a responding HE hub behind it. Returns true or false
+function ValidateHubIPAddress { #Validates provided IP address. Checks that the address is valid and that there is a responding HE hub behind it. Returns a sanitised IP address if valid or false otherwise
     param (
         [string]$IPaddress
     )
@@ -444,7 +418,17 @@ function ValidateHubIPAddress { #Validates provided IP address. Checks that the 
     if ($Octets.count -ne 4) { #Make sure there are only 4 octets
         $TestResult = $false
     } else { #Yes, there are 4 octets. Now check that each octet is a number between 0 and 255
-        foreach ($Octet in $Octets) {if (($Octet -match '^[0-9]+$' -AND [int]$Octet -le 255 -AND [int]$Octet -ge 0) -eq $false){$TestResult = $false}}
+        $SanitisedOctets = @()
+        foreach ($Octet in $Octets) {
+            if (($Octet -match '^[0-9]+$' -AND [int]$Octet -le 255 -AND [int]$Octet -ge 0) -eq $false){
+                $TestResult = $false
+            } else {
+                $SanitisedOctets += [int]$Octet
+            }
+        }
+        if ($TestResult) {
+            $IPaddress = $SanitisedOctets -join "."
+        }
     }
 
     if ($TestResult) { #The IP address is valid, now check if an HE hub can be connected to on well known HE ports
@@ -457,7 +441,11 @@ function ValidateHubIPAddress { #Validates provided IP address. Checks that the 
             $ConnectionTest.Close()
         }
     }
-    $TestResult
+    if ($TestResult) {
+        $IPaddress
+    } else {
+        $false
+    }
 }
 
 function WriteListOfDevicesToOutputDevice { #Used to produce a list of devices that is sent to the selected output devices
@@ -996,7 +984,8 @@ function ReadHubsTXTListFromDisk { #Reads the hubs.txt file and returns $false o
                 $Line = $Line.substring(0,$Line.indexOf("#"))
             }
             $Line = $Line.trim()
-            if (ValidateHubIPAddress $Line) {
+            $Line = ValidateHubIPAddress $Line
+            if ($Line) {
                 $ValidIPAddresses += $Line
             }
         }
@@ -1148,7 +1137,6 @@ function RunANewScanMenu { #Displays the Run a new scan menu
     switch ($Option) {
         1 {
             if (ReadHubsTXTListFromDisk) {
-                $script:DataHashTable.config.deviceListLastUpdated = ""
                 ScanForData -HubIPAddressList (ReadHubsTXTListFromDisk)
                 PauseHEDevicesToolKit
                 Break
@@ -1363,17 +1351,14 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                     $script:DevicesWithIssuesHidden.hubMesh_noRemoteDevice ++
                 }
             } else { #Remote devices detected.
-                $AddToHubMeshDisabledOnSourceDeviceTally = "No"
-                foreach ($RemoteDeviceID in $script:DataHashTable.hubMeshSourceDevices.$HubMeshSourceDeviceID) {
-                    if ($script:DataHashTable.devices.$HubMeshSourceDeviceID.hubMeshEnabled -eq $false) { #Remote device exists, but hub mesh is disabled on the source device
-                        if (-NOT $script:DevicesWithIssuesFound.$HubMeshSourceDeviceID.hubMesh_disabledOnSourceDevice) {
-                            if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.offlineDevices) -notcontains $HubMeshSourceDeviceID) { #Check that the device hasn't been excluded from issue category
-                                $script:DevicesWithIssuesFound[$HubMeshSourceDeviceID] += @{hubMesh_disabledOnSourceDevice = $true}
-                            } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                                $AddToHubMeshDisabledOnSourceDeviceTally = "No"
-                            }
-                        }
+                if ($script:DataHashTable.devices.$HubMeshSourceDeviceID.hubMeshEnabled -eq $false) { #Remote device exists, but hub mesh is disabled on the source device
+                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.hubMesh_disabledOnSourceDevice) -notcontains $HubMeshSourceDeviceID) { #Check that the device hasn't been excluded from issue category
+                        $script:DevicesWithIssuesFound[$HubMeshSourceDeviceID] += @{hubMesh_disabledOnSourceDevice = $true}
+                    } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                        $script:DevicesWithIssuesHidden.hubMesh_disabledOnSourceDevice ++
                     }
+                }
+                foreach ($RemoteDeviceID in $script:DataHashTable.hubMeshSourceDevices.$HubMeshSourceDeviceID) {
                     if (($script:DataHashTable.devices.$RemoteDeviceID.deviceName).ToLower() -like "offline*" -AND $script:DevicesWithIssuesFound[$RemoteDeviceID].offlineDevices -eq $false) { #Check if the remote device is offline and issue hasn't already been logged
                         if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.offlineDevices) -notcontains $RemoteDeviceID) { #Check that the device hasn't been excluded from issue category
                             $script:DevicesWithIssuesFound[$RemoteDeviceID] += @{offlineDevices = $true}
@@ -1381,9 +1366,6 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                             $script:DevicesWithIssuesHidden.offlineDevices ++
                         }
                     }
-                }
-                if ($AddToHubMeshDisabledOnSourceDeviceTally -eq "Yes") {
-                    $script:DevicesWithIssuesHidden.hubMesh_disabledOnSourceDevice ++
                 }
             }
         }
@@ -1395,21 +1377,14 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                 $CategoriesWithIssuesFound[$IssueCategory] = $script:DevicesWithIssuesFound.keys | Where-Object {$script:DevicesWithIssuesFound[$_].$IssueCategory -eq $true}
             }
             foreach ($IssueCategory in $script:DataHashTable.config.sendWebCallOnIssue.categories) {
-                #Write-Host "Issue category: $IssueCategory"
                 if ($script:DataHashTable.config.sendWebCallOnIssue.$IssueCategory.status -eq "Enabled" -AND $CategoriesWithIssuesFound.$IssueCategory.count -ge 1){
                     $WebCallURL = ""
-                    #Write-Host "Issues found and sendWebCall is Enabled"
                     if ($script:DataHashTable.config.sendWebCallOnIssue.$IssueCategory.webCallURLStatus -eq "Enabled" -AND $script:DataHashTable.config.sendWebCallOnIssue.$IssueCategory.webCallURL) {
                         $WebCallURL = $script:DataHashTable.config.sendWebCallOnIssue.$IssueCategory.webCallURL
-                        #Write-Host "Using specific URL: $WebCallURL"
                     } elseif ($script:DataHashTable.config.sendWebCallOnIssue.globalWebCallURLStatus -eq "Enabled" -AND $script:DataHashTable.config.sendWebCallOnIssue.globalWebCallURL) {
                         $WebCallURL = $script:DataHashTable.config.sendWebCallOnIssue.globalWebCallURL
-                        #Write-Host "Using global URL: $WebCallURL"
-                    } else {
-                        #Write-Host "No URL found to use: $WebCallURL"
                     }
                     if ($WebCallURL) {
-                        #Write-Host "Sending web call"
                         try {
                             $null = Invoke-WebRequest -Uri $WebCallURL -TimeoutSec 5 -ErrorAction SilentlyContinue
                         }
@@ -1419,15 +1394,9 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                             Write-Host
                             PauseHEDevicesToolKit
                         }
-                        
                     }
-                } else {
-                    #Write-Host "Didn't find any issues or sendWebCall was not enabled for $IssueCategory."
                 }
             }
-            #Write-Host
-        } else {
-            #Write-Host "Didn't find any issues or sendWebCall was not enabled."
         }
     }
 }
@@ -1875,7 +1844,10 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                 $NbrOfDevicesInNonDisplayedCategories += $script:DevicesWithIssuesHidden.$IssueCategory
             }
             if ($NbrOfDevicesInNonDisplayedCategories -ge 1) {
-                $AdditionalExcludedDevicesText = "An additional $NbrOfDevicesInNonDisplayedCategories device(s) with issues were excluded from issue categories that weren't listed above."
+                $AdditionalExcludedDevicesText = "An additional $NbrOfDevicesInNonDisplayedCategories devices with issues belonging to categories not listed above were excluded from the list."
+                if ($NbrOfDevicesInNonDisplayedCategories -eq 1) {
+                    $AdditionalExcludedDevicesText = "An additional 1 device with issues belonging to a category not listed above was excluded from the list."
+                } 
                     
                 if ($script:DataHashTable.config.outputDevice.screen) {
                     Write-Host
@@ -2078,7 +2050,7 @@ function ConfigMenu { #Displays menus for listing and changing configuration set
     $Option = WriteMenuToHost $MenuContents
     switch ($Option) {
         1 {
-            if ($Type = "Toggle"){
+            if ($Type -eq "Toggle"){
                 if ($Setting -eq "autoLaunchWebBrowser") { #Toggle between $True and $False
                     $Toggle1 = $true
                     $Toggle2 = $false
@@ -2099,24 +2071,26 @@ function ConfigMenu { #Displays menus for listing and changing configuration set
                 Break
             } else {
                 Write-Host
-                Write-Host "New value for $($Setting): " -NoNewline
-                $Response = Read-Host
                 if ($Setting -eq "textColour"){
+                    Write-Host "Valid colours are: $($script:ValidColours)"
+                    Write-Host "New text colour: " -NoNewline
+                    $Response = Read-Host
                     if ($script:ValidColours -contains $Response) {
                         $script:DataHashTable.config.$Setting = (Get-Culture).TextInfo.ToTitleCase([string]$Response.ToLower())
                         $script:PSDefaultParameterValues['*:ForegroundColor'] = $script:DataHashTable.config.$Setting
                     } else {
                         Write-Host
-                        Write-Host "Invalid colour. Valid colours are:" -ForegroundColor "Red"
-                        Write-Host $script:ValidColours
+                        Write-Host "Invalid colour." -ForegroundColor "Red"
                         Write-Host
                         PauseHEDevicesToolKit
                         Break   
                     }
                 } elseif ($Type -eq "String"){
-                    $script:DataHashTable.config.$Setting = [string]$Response
+                    Write-Host "New value for $($Setting): " -NoNewline
+                    $script:DataHashTable.config.$Setting = [string](Read-Host)
                 } elseif ($Type -eq "Int"){
-                    $script:DataHashTable.config.$Setting = [int]$Response
+                    Write-Host "New value for $($Setting): " -NoNewline
+                    $script:DataHashTable.config.$Setting = [int](Read-Host)
                 }
                 WriteDataToDisk
             }
@@ -2926,7 +2900,7 @@ $DefaultFilePathHubListCSV = $FilePath + "\HubList.csv"
 $DefaultFilePathHubMeshDeviceListHTML = $FilePath + "\HubMeshDeviceList.html"
 $DefaultFilePathHubMeshDeviceListCSV = $FilePath + "\HubMeshDeviceList.csv"
 $DefaultInactivityThresholdMinutes = 1440
-$DefaultInternetProtocol = "http://"
+$DefaultInternetProtocol = "https://"
 $DefaultLowBatteryChargeThreshold = 20
 $DefaultOutputDevice = [PSCustomObject]@{screen=$true;HTML=$false;CSV=$false}
 $DefaultSendWebCallOnIssueStatus = "Disabled"
@@ -2999,22 +2973,20 @@ if ($NonInteractive) {
         Write-Host "* A new scan has been requested."
         if ($HubIPAddress) {
             Write-Host "* Starting a new scan."
-            $script:DataHashTable.config.deviceListLastUpdated = ""
             ScanForData -HubIPAddressList ($HubIPAddress -split ",")
         } else {
             Write-Host "* No HubIPAddress supplied. Checking disk to see if '$(Split-Path ($script:HubListFilePath) -Leaf)' has any addresses in it."
             if (ReadHubsTXTListFromDisk) {
-                $script:DataHashTable.config.deviceListLastUpdated = ""
                 ScanForData -HubIPAddressList (ReadHubsTXTListFromDisk)
             } else {
                 Write-Host "* No IP addresses for Hubitat Elevation hubs found in '$script:HubListFilePath'."
                 Write-Host "* Unable to find a source of hub IP addresses. Press ENTER to enter interactive mode." -NoNewline -ForegroundColor "Red"
                 Read-Host
+                $NonInteractive = $false
                 if ($script:DataHashTable.config.deviceListLastUpdated) {
                     WriteTopOfPage "Reading data from disk..."
                     ReadDataFromDisk
                 }
-                Clear-Host
                 RunANewScanMenu 
                 Break               
             }
@@ -3029,7 +3001,7 @@ if ($NonInteractive) {
     } else {
         Write-Host "* No valid device data found. Press ENTER to enter interactive mode." -NoNewline -ForegroundColor "Red"
         Read-Host
-        Clear-Host
+        $NonInteractive = $false
         RunANewScanMenu
         Break
     }
