@@ -219,6 +219,11 @@
   Hubitat Elevation platform version 2.3.9 or newer
   
   ---Release Notes---
+  2025.03.08.2219
+  Fixed bug with invalid SSL certificates not being ignore when using PowerShell 6 or above. 
+  PowerShell version 6 introduced the parameter -SkipCertificateCheck for invoke-webrequest. 
+  Added check for PowerShell version and if version is 6 or greater, use the new parameter.
+
   2025.03.04.1826
   First public version
 
@@ -241,7 +246,7 @@ param (
     [switch]$SearchForHubMeshDeviceByName,
     [string]$SearchTerm
 )
-$Version = "2025.03.04.1826"
+$Version = "2025.03.08.2219"
 
 function ScanForData { #Takes an array of hub IP addresses as the input and queries them and their devices for data. Wipes existing data
     param (
@@ -254,7 +259,9 @@ function ScanForData { #Takes an array of hub IP addresses as the input and quer
         
         $i = 0
         $ValidHEAddressFound = $false
-        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLHandler]::GetSSLHandler() #Ignore all SSL cert issues
+        if ($script:PowerShellVersion -eq 5) {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLHandler]::GetSSLHandler() #Ignore all SSL cert issues
+        }
         foreach ($HubIPAddress in $HubIPAddressList) {
             $i++
             $ValidatedAddress = ValidateHubIPAddress -IPaddress $HubIPAddress
@@ -268,7 +275,11 @@ function ScanForData { #Takes an array of hub IP addresses as the input and quer
                     $script:DataHashTable.config.deviceListLastUpdated = ""
                 }
                 $ValidHEAddressFound = $true
-                $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json")).Content | ConvertFrom-Json
+                if ($script:PowerShellVersion -eq 5) {
+                    $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json")).Content | ConvertFrom-Json
+                } else {
+                    $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json") -SkipCertificateCheck).Content | ConvertFrom-Json
+                }
                 
                 $script:DataHashTable.hubs.Add($ValidatedAddress,[ordered]@{    hubName = $HubDetails.hubName
                                                                             hubIPAddress = $ValidatedAddress
@@ -279,7 +290,11 @@ function ScanForData { #Takes an array of hub IP addresses as the input and quer
 
                 Write-Host ("{0} found. Getting device data" -f ($HubDetails.hubName))
                 $URL = $script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub2/devicesList"
-                ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL).Content).devices) $ValidatedAddress
+                if ($script:PowerShellVersion -eq 5) {
+                    ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL).Content).devices) $ValidatedAddress
+                } else {
+                    ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL -SkipCertificateCheck).Content).devices) $ValidatedAddress
+                }
                 Write-Host 
                 $script:DataHashTable.config.deviceListLastUpdated = (Get-Date).DateTime
                 SortDataHashTableByName
@@ -292,7 +307,9 @@ function ScanForData { #Takes an array of hub IP addresses as the input and quer
             Write-Host
             
         }
-        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null #Stop ignoring SSL cert issues
+        if ($script:PowerShellVersion -eq 5) {
+            [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null #Stop ignoring SSL cert issues
+        }
         if (-NOT $ValidHEAddressFound) { #No valid HE hub address was found, so no new devices were ever scanned, and the old data was never removed.
             Write-Host
             Write-Host "No valid Hubitat Elevation hub IP addresses were found. No new scan has taken place." -ForegroundColor "Red"
@@ -315,7 +332,11 @@ function ScanDevice { #Called from ScanForData to query each found device for da
 
     foreach ($Device in $Devices) {
         Write-Host "." -NoNewline
-        $VerboseDeviceDetails = ((Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $HubIPaddress + "/device/fullJson/" + $Device.data.id)).Content).ToLower() | ConvertFrom-Json
+        if ($script:PowerShellVersion -eq 5) {
+            $VerboseDeviceDetails = ((Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $HubIPaddress + "/device/fullJson/" + $Device.data.id)).Content).ToLower() | ConvertFrom-Json
+        } else {
+            $VerboseDeviceDetails = ((Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $HubIPaddress + "/device/fullJson/" + $Device.data.id) -SkipCertificateCheck).Content).ToLower() | ConvertFrom-Json
+        }
         $DeviceId = $HubIPaddress + "-" + $Device.data.id
         $DeviceURL = $HubIPaddress + "/device/edit/" + $Device.data.id
         $DeviceStatus = "Enabled"
@@ -1386,7 +1407,13 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                     }
                     if ($WebCallURL) {
                         try {
-                            $null = Invoke-WebRequest -Uri $WebCallURL -TimeoutSec 5 -ErrorAction SilentlyContinue
+                            if ($script:PowerShellVersion -eq 5) {
+                                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLHandler]::GetSSLHandler() #Ignore all SSL cert issues
+                                $null = Invoke-WebRequest -Uri $WebCallURL -TimeoutSec 5 -ErrorAction SilentlyContinue
+                                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null #Stop ignoring SSL cert issues
+                            } else {
+                                $null = Invoke-WebRequest -Uri $WebCallURL -TimeoutSec 5  -SkipCertificateCheck -ErrorAction SilentlyContinue
+                            }
                         }
                         catch {
                             Write-Host
@@ -2887,6 +2914,7 @@ function SetHTMLFooter { #Returns the HTML code for the end of the HTML file
 $FilePath = (Split-Path ($MyInvocation.MyCommand.Path) -Parent)
 $DataJSONFilePath = $FilePath + "\Data.json"
 $HubListFilePath = $FilePath + "\hubs.txt"
+$PowerShellVersion = $PSVersionTable.PSVersion.major
 
 $DefaultAutoLaunchWebBrowser = $false
 $DefaultDateTimeFormat = "MMM dd, yyyy @ HH:mm"
@@ -2900,7 +2928,7 @@ $DefaultFilePathHubListCSV = $FilePath + "\HubList.csv"
 $DefaultFilePathHubMeshDeviceListHTML = $FilePath + "\HubMeshDeviceList.html"
 $DefaultFilePathHubMeshDeviceListCSV = $FilePath + "\HubMeshDeviceList.csv"
 $DefaultInactivityThresholdMinutes = 1440
-$DefaultInternetProtocol = "https://"
+$DefaultInternetProtocol = "http://"
 $DefaultLowBatteryChargeThreshold = 20
 $DefaultOutputDevice = [PSCustomObject]@{screen=$true;HTML=$false;CSV=$false}
 $DefaultSendWebCallOnIssueStatus = "Disabled"
