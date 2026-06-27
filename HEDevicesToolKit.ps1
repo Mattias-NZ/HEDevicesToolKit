@@ -34,6 +34,7 @@
   * Inactive devices - Checks to see if the last activity recorded for a device is older than
     than the set threshold (user configurable).
   * Offline devices - Checks for devices that are reported as being offline.
+  * Not in use devices - Checks for devices that are not in use.
   * Hub Mesh - Orphaned remote devices - Checks all Hub Mesh devices to identify any remote 
     devices that have been orphaned by the source device having been removed.
   * Hub Mesh - Hub Mesh disabled on source device - Checks all Hub Mesh devices for source
@@ -219,8 +220,17 @@
   Hubitat Elevation platform version 2.3.9 or newer
   
   ---Release Notes---
+  2026.06.27.1824
+  At some stage between Hubitat firmware versions 2.4.x and 2.5.0, the port number was 
+  included in the URL returned in the 'remoteDeviceUrl' property. Modified the code to remove
+  the port number if it was found.
+  Added device issue check for devices that are not in use.
+  Added a 'Rescan' option to the main menu. 
+  Grouped devices by hubs and then sorted them by name in the device issues output for easier
+  overview.
+  
   2025.03.08.2219
-  Fixed bug with invalid SSL certificates not being ignore when using PowerShell 6 or above. 
+  Fixed bug with invalid SSL certificates not being ignored when using PowerShell 6 or above. 
   PowerShell version 6 introduced the parameter -SkipCertificateCheck for invoke-webrequest. 
   Added check for PowerShell version and if version is 6 or greater, use the new parameter.
 
@@ -246,7 +256,7 @@ param (
     [switch]$SearchForHubMeshDeviceByName,
     [string]$SearchTerm
 )
-$Version = "2025.03.08.2219"
+$Version = "2026.06.27.1824"
 
 function ScanForData { #Takes an array of hub IP addresses as the input and queries them and their devices for data. Wipes existing data
     param (
@@ -392,7 +402,13 @@ function ScanDevice { #Called from ScanForData to query each found device for da
             $linked = $true
             $sourceDeviceURL = $VerboseDeviceDetails.device.remoteDeviceUrl
             $sourceDeviceURL = $sourceDeviceURL.substring(($sourceDeviceURL.indexof("://")+3)) #Get rid of the internet protocol from the string
-            $sourceDeviceID = ($sourceDeviceURL.split("/",4))[0] + "-" + ($sourceDeviceURL.split("/"))[-1]
+            #Later versions of the hub firmware (somewhere between 2.4.x and 2.5.0) introduced the port number in the remoteDeviceURL string. We need to strip that from the string.
+            $posColon = $sourceDeviceURL.IndexOf(":") #Find the colon separating the IP address and port (-1 if not found)
+            $posSlash = $sourceDeviceURL.IndexOf("/") #Find the first forward slash which should be separating the port and the path (-1 if not found)
+            if ($posColon -ne -1 -AND $posSlash -ne -1 -AND ($posSlash - $posColon) -le 6 -AND ($posSlash - $posColon) -ge 3){ #Only try to strip the port number from the string if we've actually found a port number being present and confirming that the colon is before the slash and the distance between them only can accommodate a port number of 2 to 5 digits
+                $sourceDeviceURL = $sourceDeviceURL.substring(0,$posColon) + $sourceDeviceURL.substring($posSlash) #Stripping out the colon and port number
+            }
+            $sourceDeviceID = ($sourceDeviceURL.split("/",4))[0] + "-" + ($sourceDeviceURL.split("/"))[-1] #Create an ID string consisting of "<IP address>-<deviceID>"
             $script:DataHashTable.hubMeshSourceDevices[$sourceDeviceID] += @($DeviceId)
         } 
         if ($VerboseDeviceDetails.device.meshenabled) { #Indicates a source Hub Mesh device
@@ -877,7 +893,8 @@ function WriteHubListToOutputDevice { #Used to produce a list of hubs that is se
                                     hubID="Hub ID"
                                     hubURL="Hub URL"
                                     hardwareVersion="Hardware Version"
-                                    platformVersion="Platform Version"           
+                                    platformVersion="Platform Version"  
+                                    deviceCount="Number of devices"         
             }
             Remove-Item $CSVFilePath -Force -ErrorAction SilentlyContinue
             #Print header
@@ -895,6 +912,7 @@ function WriteHubListToOutputDevice { #Used to produce a list of hubs that is se
 
         foreach ($HubID in $script:DataHashTable.hubs.keys) {
             $URL = $script:DataHashTable.config.internetProtocol + $script:DataHashTable.hubs.$HubID.hubURL
+            $nbrOfDevicesOnHub = ($script:DataHashTable.devices.keys | Where-Object {$script:DataHashTable.devices.$_.hubIPAddress -eq $HubID}).count
             $HTML += "<div class=`"$HubID`">"
             $HTML += GenerateOutput @{settings=@{useFieldDescriptions=$true
                                                         firstLineIsTitle=$true}
@@ -906,7 +924,9 @@ function WriteHubListToOutputDevice { #Used to produce a list of hubs that is se
                                                         three=@{displayValue=$script:DataHashTable.hubs.$HubID.hardwareVersion
                                                             displayName="Hardware version"}
                                                         four=@{displayValue=$script:DataHashTable.hubs.$HubID.platformVersion
-                                                            displayName="Platform version"}}
+                                                            displayName="Platform version"}
+                                                        five=@{displayValue=$nbrOfDevicesOnHub
+                                                            displayName="Number of devices"}}
                                             }
             if ($script:DataHashTable.config.outputDevice.screen) {Write-Host}
             if ($script:DataHashTable.config.outputDevice.HTML) {$HTML += "</div><div class=`"divider`"></div>"}
@@ -915,11 +935,12 @@ function WriteHubListToOutputDevice { #Used to produce a list of hubs that is se
                          hubID=$HubID
                          hubURL=$URL
                          platformVersion=$script:DataHashTable.hubs.$HubID.platformVersion
-                         hardwareVersion=$script:DataHashTable.hubs.$HubID.hardwareVersion}
+                         hardwareVersion=$script:DataHashTable.hubs.$HubID.hardwareVersion
+                         deviceCount=$nbrOfDevicesOnHub}
                 $i = 0
                 foreach ($Column in $CSVHeader.keys) {
                     $i++
-                    $CSVContent += '"' + $CSV.$Column.replace('"','""') + '"'
+                    $CSVContent += '"' + $CSV.[string]$Column.replace('"','""') + '"'
                     if ($i -lt $CSVHeader.count) {
                         $CSVContent += ","
                     }
@@ -1072,7 +1093,7 @@ function EraseConfigurationSettingsAndSetDefaults { #Erases all config settings 
     $script:DataHashTable.config.filePath.Add("HubMeshDeviceListHTML",$script:DefaultFilePathHubMeshDeviceListHTML)
     $script:DataHashTable.config.filePath.Add("HubMeshDeviceListCSV",$script:DefaultFilePathHubMeshDeviceListCSV)
     $script:DataHashTable.config.sendWebCallOnIssue = [ordered]@{}
-    $script:DataHashTable.config.sendWebCallOnIssue.Add("categories",@("lowBattery","inactiveDevices","offlineDevices","hubMesh_orphanedDevices","hubMesh_disabledOnSourceDevice","hubMesh_noRemoteDevice"))
+    $script:DataHashTable.config.sendWebCallOnIssue.Add("categories",@("lowBattery","inactiveDevices","offlineDevices","notInUseDevices","hubMesh_orphanedDevices","hubMesh_disabledOnSourceDevice","hubMesh_noRemoteDevice"))
     $script:DataHashTable.config.sendWebCallOnIssue.Add("globalWebCallURLStatus",$script:DefaultGlobalWebCallURLStatus)
     $script:DataHashTable.config.sendWebCallOnIssue.Add("status",$script:DefaultSendWebCallOnIssueStatus)
     foreach ($Category in $script:DataHashTable.config.sendWebCallOnIssue.categories) {
@@ -1146,13 +1167,13 @@ function InitialiseDB { #Checks if data already exists on disk and provides opti
 
 function RunANewScanMenu { #Displays the Run a new scan menu
     WriteTopOfPage "Run a new scan"
-    Write-Host "The scan uses a list of hub IP addresses to query."
+    Write-Host "The scan queries devices by using a list of hub IP addresses."
     $MenuContents = (   "How would you like to provide this list?",
                         "Use the contents of '$($script:HubListFilePath)'", #1
                         "Enter IP address(es) manually", #2
                         "Scan network for hubs", #3
-                        "To main menu" #99
-    ) 
+                        "To main menu") #99
+    
     $Option = WriteMenuToHost $MenuContents
     Write-Host
     switch ($Option) {
@@ -1211,7 +1232,11 @@ function RunANewScanMenu { #Displays the Run a new scan menu
             Break
         }
         99 {
-            MainMenu
+            if ($script:DataHashTable.hubs.count -ge 1) {
+                MainMenu
+            } else {
+                InitialiseDB
+            }
             Break
         }
     }
@@ -1313,6 +1338,13 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                         $script:DevicesWithIssuesFound[$DeviceID] += @{offlineDevices = $true}
                     } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
                         $script:DevicesWithIssuesHidden.offlineDevices ++
+                    }
+                }
+                if (($script:DataHashTable.devices.$DeviceID.inUseBy).count -eq 0 -AND $script:DataHashTable.devices.$DeviceID.child -eq $false) { #Check to see if the device is unused and is not a child device
+                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.notInUseDevices) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category   
+                        $script:DevicesWithIssuesFound[$DeviceID] += @{notInUseDevices = $true}
+                    } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                        $script:DevicesWithIssuesHidden.notInUseDevices ++
                     }
                 }
             }
@@ -1654,6 +1686,8 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                                                             text="An inactive device is a Zigbee, ZWave or Matter device that hasn't reported any activity for the last $($script:DataHashTable.config.inactivityThresholdMinutes) minutes. Causes for this include device dropping off the mesh, the device is non-functional (e.g. dead or dead battery), or there may just not have been any activity for the device to report and it has not responded to the hub's periodic pings.","The following inactive devices were detected:"}
             $CategoryText["offlineDevices"] = @{title="OFFLINE DEVICES"
                                                             text="An offline device is a device that HE no longer can contact. It could for example be a Hub Mesh remote device where Hub Mesh has been disabled on the source device, leading to the remote device going offline. It could also be a LAN device that has been disconnected from the network or it has received a new IP address and is no longer accessible on the original IP address.","The following offline devices were detected:"}
+            $CategoryText["notInUseDevices"] = @{title="NOT IN USE DEVICES"
+                                                            text="A not in use device is a device that is not in use by anything on that particular hub. It's not an issue per se, but it is a device that appears surplus to requirements and is using system resources, especially if it is a remote hub mesh device.","The following not in use devices were detected:"}
             $CategoryText["hubMesh_orphanedDevices"] = @{title="HUB MESH - ORPHANED DEVICES"
                                                             text="An orphaned device is a Hub Mesh remote device whose source device has been removed.","Check first that all hubs in your Hub Mesh environment have been added to this program. This error is expected for each remote device of source devices that are installed on hubs that haven't been included.","If all hubs are accounted for, the only way to resolve this issue is to remove the orphaned device and replace it with a working device.","The following orphaned devices were detected:"}
             $CategoryText["hubMesh_disabledOnSourceDevice"] = @{title="HUB MESH - HUB MESH DISABLED ON SOURCE DEVICE"
@@ -1712,7 +1746,7 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                                                 hub="Hub"
                                                 lastActivityTime="Last Activity Time"          
                         }
-                    } elseif (@("offlineDevices","hubMesh_orphanedDevices","hubMesh_noRemoteDevice") -contains $Category) {
+                    } elseif (@("offlineDevices","notInUseDevices","hubMesh_orphanedDevices","hubMesh_noRemoteDevice") -contains $Category) {
                         $CSVHeader = [ordered]@{deviceName="Device Name"
                                                 deviceURL="URL"
                                                 hub="Hub"          
@@ -1736,7 +1770,8 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                     }
                     $CSVContent += "`n"
                 }
-                foreach ($Device in $CategoriesWithIssuesFound[$Category]) {
+                #foreach ($Device in $CategoriesWithIssuesFound[$Category]) {
+                foreach ($Device in ($CategoriesWithIssuesFound[$Category] | Sort-Object { $script:DataHashTable.devices[$_].hubIPAddress },{ $script:DataHashTable.devices[$_].deviceName } )) {
                     if ($ExcludeDevicesMode) {
                         $NbrOfOptions ++
                         $HashTableOfDevicesWithIssues["$NbrOfOptions"] = @{deviceID=$Device
@@ -1788,7 +1823,7 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                             }
                             break
                         }
-                        {@("offlineDevices","hubMesh_orphanedDevices","hubMesh_noRemoteDevice") -contains $_} {
+                        {@("offlineDevices","notInUseDevices","hubMesh_orphanedDevices","hubMesh_noRemoteDevice") -contains $_} {
                             if ($script:DataHashTable.config.outputDevice.screen -OR $script:DataHashTable.config.outputDevice.HTML) {
                                 $HTML += GenerateOutput  @{settings=@{useFieldDescriptions=$true}
                                                            one=@{     one=@{displayValue=$script:DataHashTable.devices.$Device.deviceName
@@ -2147,15 +2182,16 @@ function MainMenu { #Displays the main menu
     Write-Host ("Output device(s): $(($script:DataHashTable.config.outputDevice.psobject.properties | Where-Object {$_.Value} | ForEach-Object {$_.Name}) -join ", ")")
     Write-Host
     $MenuContents = (   "What would you like to do?",
-                        "List all hubs", #1
-                        "List all devices", #2
-                        "List all Hub Mesh devices", #3
+                        "List discovered hubs", #1
+                        "List discovered devices", #2
+                        "List discovered Hub Mesh devices", #3
                         "Search for devices", #4
                         "Check for device issues", #5
                         "Divider",
                         "Configuration settings", #6
                         "Divider",
-                        "Reset all device data and run a new scan", #7
+                        "Rescan current hubs", #7
+                        "Perform new scan with different hub(s)", #8
                         "Exit program" #99
     )
     $Option = WriteMenuToHost $MenuContents
@@ -2209,7 +2245,13 @@ function MainMenu { #Displays the main menu
             MainMenu
             Break
         }
-        7{
+        7 {
+            ScanForData -HubIPAddressList $script:DataHashTable.hubs.keys | ForEach-Object {$script:DataHashTable.hubs.$_.hubURL}
+            PauseHEDevicesToolKit
+            MainMenu
+            Break
+        }
+        8{
             RunANewScanMenu
             MainMenu
             Break
@@ -2766,14 +2808,15 @@ function WriteMenuToHost { #Displays a menu with the supplied metadata and valid
             } else {
                 $ValidResponses += $i -$NbrOfDividersSoFar
                 $NbrOfOptionsText = ($i -$NbrOfDividersSoFar).ToString()
+                $MenuOption = $MenuOptions[$i]
                 do {
-                    if ($MenuOptions[$i].length -le $TableWidth-1) {
-                        Write-Host ("{2}{0} {3} {1} {2}" -f (($NbrOfOptionsText.padleft(3," ")),($MenuOptions[$i].PadRight($TableWidth-1, " ")),([char]0x2503),([char]0x2502)))
+                    if ($MenuOption.length -le $TableWidth-1) {
+                        Write-Host ("{2}{0} {3} {1} {2}" -f (($NbrOfOptionsText.padleft(3," ")),($MenuOption.PadRight($TableWidth-1, " ")),([char]0x2503),([char]0x2502)))
                         $Repeat = $false
                     } else {
-                        Write-Host ("{2}{0} {3} {1} {2}" -f (($NbrOfOptionsText.padleft(3," ")),(($MenuOptions[$i]).Substring(0, $TableWidth-2) + "~"),([char]0x2503),([char]0x2502)))
+                        Write-Host ("{2}{0} {3} {1} {2}" -f (($NbrOfOptionsText.padleft(3," ")),($MenuOption.Substring(0, $TableWidth-2) + "~"),([char]0x2503),([char]0x2502)))
                         $Repeat = $true
-                        $MenuOptions[$i] = " ~" + $MenuOptions[$i].Substring($TableWidth-2,$MenuOptions[$i].Length-$TableWidth+2)
+                        $MenuOption = " ~" + $MenuOption.Substring($TableWidth-2,$MenuOption.Length-$TableWidth+2)
                     }
                     $NbrOfOptionsText = ""
                 } while ($Repeat)
