@@ -220,6 +220,12 @@
   Hubitat Elevation platform version 2.3.9 or newer
   
   ---Release Notes---
+  2026.06.28.1334
+  Optimised the web calls to the HE hubs to reduce the time it takes to scan for devices.
+  Web calls are now done in parallel which significantly reduces the time it takes (requires
+  PowerShell version 7 or greater. The script will process calls in sequential order on lower 
+  PowerShell versions).
+
   2026.06.27.1824
   At some stage between Hubitat firmware versions 2.4.x and 2.5.0, the port number was 
   included in the URL returned in the 'remoteDeviceUrl' property. Modified the code to remove
@@ -256,9 +262,20 @@ param (
     [switch]$SearchForHubMeshDeviceByName,
     [string]$SearchTerm
 )
-$Version = "2026.06.27.1824"
+$Version = "2026.06.28.1334"
 
-function ScanForData { #Takes an array of hub IP addresses as the input and queries them and their devices for data. Wipes existing data
+function ScanForData { #Takes an array of hub IP addresses as the input and forwards them to the correct function.
+    param (
+        [string[]]$HubIPAddressList
+    )
+    if ($script:PowerShellVersion -ge 7) {
+        ScanForDataModern $HubIPAddressList
+    } else {
+        ScanForDataLegacy $HubIPAddressList
+    }
+}
+
+function ScanForDataLegacy { #For PowerShell versions 5 and 6. Takes an array of hub IP addresses as the input and queries them and their devices for data. Wipes existing data
     param (
         [string[]]$HubIPAddressList
     )
@@ -298,7 +315,7 @@ function ScanForData { #Takes an array of hub IP addresses as the input and quer
                                                                             hardwareVersion = $HubDetails.hardwareVersion
                 })
 
-                Write-Host ("{0} found. Getting device data" -f ($HubDetails.hubName))
+                Write-Host ("{0} found. (D)ownloading and (A)nalysing device data." -f ($HubDetails.hubName))
                 $URL = $script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub2/devicesList"
                 if ($script:PowerShellVersion -eq 5) {
                     ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL).Content).devices) $ValidatedAddress
@@ -334,18 +351,229 @@ function ScanForData { #Takes an array of hub IP addresses as the input and quer
     }
 }
 
+function ScanForDataModern { #For PowerShell versions 7 and newer. Takes an array of hub IP addresses as the input and queries them and their devices for data in parallel. Wipes existing data.
+    param (
+        [string[]]$HubIPAddressList
+    )
+    
+    $AddressCount = $HubIPAddressList.Count
+    if ($AddressCount -lt 1) { 
+        return 
+    }
+
+    # Capture the raw code of the functions as text strings
+    $ScanDeviceDefinition = $Function:ScanDevice.ToString()
+    $ValidateHubDefinition = $Function:ValidateHubIPAddress.ToString()
+    
+    # Pass configuration settings needed inside the parallel runspaces
+    $Protocol = $script:DataHashTable.config.internetProtocol
+    $PSVersion = $script:PowerShellVersion
+
+    # Process the hubs in parallel. 
+    $HubResults = $HubIPAddressList | ForEach-Object -Parallel {
+        $script:PSDefaultParameterValues = $using:script:PSDefaultParameterValues
+        $HubIPAddress = $_
+        $null = New-Item -Path "Function:\ScanDevice" -Value ([scriptblock]::Create($using:ScanDeviceDefinition)) -Force
+        $null = New-Item -Path "Function:\ValidateHubIPAddress" -Value ([scriptblock]::Create($using:ValidateHubDefinition)) -Force
+
+        # Validate the address inside the thread
+        $ValidatedAddress = ValidateHubIPAddress -IPaddress $HubIPAddress
+        if (-not $ValidatedAddress) {
+            Write-Host "`r[Hub $HubIPAddress] Invalid IP address or no HE hub detected. Skipping." -ForegroundColor "Red"
+            return $null
+        }
+
+        Write-Host "Getting details from hub at IP address $ValidatedAddress"
+        
+        # Initialize thread-safe, isolated local storage for this specific hub's processing
+        $LocalHubData = [PSCustomObject]@{
+                                            HubIPAddress = $ValidatedAddress
+                                            HubDetails   = $null
+                                            Hubs         = [ordered]@{}
+                                            Devices      = [ordered]@{}
+                                            Apps         = [ordered]@{}
+                                            MeshDevices  = @{}
+                                        }
+
+        # Temporarily redirect the global tracker inside this thread's scope so ScanDevice writes to this instead of the global script scope
+        $script:DataHashTable = @{
+                                    config = @{ internetProtocol = $using:Protocol }
+                                    apps = $LocalHubData.Apps
+                                    devices = $LocalHubData.Devices
+                                    hubMeshSourceDevices = $LocalHubData.MeshDevices
+                                }
+        $script:PowerShellVersion = $using:PSVersion
+
+        # Fetch Hub Details
+        $HubDetailsUrl = $using:Protocol + $ValidatedAddress + "/hub/details/json"
+        try {
+            $HubDetails = (Invoke-WebRequest -Uri $HubDetailsUrl -SkipCertificateCheck -TimeoutSec 10).Content | ConvertFrom-Json
+            $LocalHubData.HubDetails = $HubDetails
+            Write-Host ("{0} found at {1}. (D)ownloading and (A)nalysing device data." -f ($HubDetails.hubName,$ValidatedAddress))
+        } catch {
+            Write-Host "`r[Hub $ValidatedAddress] Failed to retrieve hub details." -ForegroundColor Red
+            return $null
+        }
+
+        # Build local hub properties
+        $LocalHubData.Hubs.Add($ValidatedAddress, [ordered]@{    
+            hubName         = $HubDetails.hubName
+            hubIPAddress    = $ValidatedAddress
+            hubURL          = $ValidatedAddress
+            platformVersion = $HubDetails.platformVersion
+            hardwareVersion = $HubDetails.hardwareVersion
+        })
+
+        # Fetch Master Device List for this Hub
+        $DevicesUrl = $using:Protocol + $ValidatedAddress + "/hub2/devicesList"
+        try {
+            $DeviceListPayload = (ConvertFrom-Json (Invoke-WebRequest -Uri $DevicesUrl -SkipCertificateCheck -TimeoutSec 15).Content).devices
+            ScanDevice $DeviceListPayload $ValidatedAddress
+            
+        } catch {
+            Write-Host "`r[Hub $ValidatedAddress] Failed to process device listings." -ForegroundColor Red
+        }
+
+        # Return the collected data payload back to the main pipeline
+        $LocalHubData
+    } -ThrottleLimit 15 # Connects to up to 15 hubs simultaneously
+
+    # Create a clean slate staging container here instead of erasing production data upfront
+    $StagingTable = [ordered]@{
+                                hubs                 = [ordered]@{}
+                                devices              = [ordered]@{}
+                                apps                 = [ordered]@{}
+                                hubMeshSourceDevices = @{}
+                            }
+
+    #Merge data collected in parallel above
+    $ValidHEAddressFound = $false
+    Write-Host
+    Write-Host
+    
+    foreach ($Result in $HubResults) {
+        if (-not $Result) { 
+            continue 
+        }
+        $ValidHEAddressFound = $true
+        
+        $ValidatedAddress = $Result.HubIPAddress
+        
+        # Merge Hub entry into staging
+        $StagingTable.hubs.Add($ValidatedAddress, $Result.Hubs[$ValidatedAddress])
+
+        # Merge Apps mapped by this hub into staging
+        foreach ($AppID in $Result.Apps.Keys) {
+            if (-not $script:DataHashTable.apps.$AppID) {
+                $StagingTable.apps.Add($AppID, $Result.Apps[$AppID])
+            }
+        }
+
+        # Merge Devices mapped by this hub into staging
+        foreach ($DeviceID in $Result.Devices.Keys) {
+            $StagingTable.devices.Add($DeviceID, $Result.Devices[$DeviceID])
+        }
+
+        # Merge Hub Mesh records into staging
+        foreach ($MeshID in $Result.MeshDevices.Keys) {
+            if (-not $StagingTable.hubMeshSourceDevices[$MeshID]) {
+                $StagingTable.hubMeshSourceDevices[$MeshID] = $Result.MeshDevices[$MeshID]
+            } else {
+                $StagingTable.hubMeshSourceDevices[$MeshID] += $Result.MeshDevices[$MeshID]
+            }
+        }
+    }
+
+    #Wrapping up
+    if ($ValidHEAddressFound) {
+        $script:DataHashTable.hubs = [ordered]@{}
+        $script:DataHashTable.devices = [ordered]@{}
+        $script:DataHashTable.apps = [ordered]@{}
+        $script:DataHashTable.hubMeshSourceDevices = @{}
+        $script:DataHashTable.config.deviceListLastUpdated = (Get-Date).DateTime
+        $script:DataHashTable.hubs = $StagingTable.hubs
+        $script:DataHashTable.devices = $StagingTable.devices
+        $script:DataHashTable.apps = $StagingTable.apps
+        $script:DataHashTable.hubMeshSourceDevices = $StagingTable.hubMeshSourceDevices
+        SortDataHashTableByName
+        WriteDataToDisk
+        Write-Host "Scan completed successfully."
+    } else {
+        Write-Host "No valid Hubitat Elevation hub IP addresses responded." -ForegroundColor "Red"
+        if ($script:DataHashTable.config.deviceListLastUpdated) {
+            Write-Host "Original data remains untouched."
+        }
+        if (-not $NonInteractive) {
+            Write-Host
+        }
+    }
+}
+
 function ScanDevice { #Called from ScanForData to query each found device for data
     param (
         $Devices,
         $HubIPaddress
     )
 
+    # Downloading device data for each device.
+    $URLBase = $script:DataHashTable.config.internetProtocol + $HubIPaddress + "/device/fullJson/"
+    $FetchedPayloads = [PSCustomObject]@{}
+
+    # If PowerShell 7 or later, parallel download device data
+    if ($script:PowerShellVersion -ge 7) {
+        $FetchedPayloads = $Devices | ForEach-Object -Parallel {
+            $script:PSDefaultParameterValues = $using:script:PSDefaultParameterValues
+            $ID = $_.data.id
+            $URL = $using:URLBase + $ID
+            try {
+                $Content = (Invoke-WebRequest -Uri $URL -SkipCertificateCheck -TimeoutSec 10).Content
+                # Return a clean key/value pair object to the main thread
+                [PSCustomObject]@{ ID = $ID; 
+                                   Json = $Content.ToLower() | ConvertFrom-Json 
+                                 }
+                Write-Host "D" -NoNewline
+            } catch {
+                Write-Host "`rFailed to fetch device $ID." -ForegroundColor Red
+                return $null
+            }
+        } -ThrottleLimit 6 #Adjust up or down based on your Hub's CPU comfort level
+    } else {
+        $FetchedPayloads = foreach ($Device in $Devices) {
+            $ID = $Device.data.id
+            $URL = $URLBase + $ID
+            try {
+                if ($script:PowerShellVersion -eq 5) {
+                    $Content = (Invoke-WebRequest -Uri $URL -TimeoutSec 10).Content
+                } else {
+                    $Content = (Invoke-WebRequest -Uri $URL -SkipCertificateCheck -TimeoutSec 10).Content
+                }
+                # Return a clean key/value pair object to the main thread
+                [PSCustomObject]@{ ID = $ID; 
+                                 Json = $Content.ToLower() | ConvertFrom-Json 
+                                 }
+                Write-Host "D" -NoNewline
+            } catch {
+                Write-Host "`rFailed to fetch device $ID" -ForegroundColor Red
+                return $null
+            }
+        }
+    }
+
+    # Convert the parallel results into a lightning-fast local lookup table
+    $PayloadCache = @{}
+    foreach ($Item in $FetchedPayloads) {
+        if ($Item) { 
+            $PayloadCache[$Item.ID] = $Item.Json 
+        }
+    }
+
+    # Now analyse each device using the downloaded data.
     foreach ($Device in $Devices) {
-        Write-Host "." -NoNewline
-        if ($script:PowerShellVersion -eq 5) {
-            $VerboseDeviceDetails = ((Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $HubIPaddress + "/device/fullJson/" + $Device.data.id)).Content).ToLower() | ConvertFrom-Json
-        } else {
-            $VerboseDeviceDetails = ((Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $HubIPaddress + "/device/fullJson/" + $Device.data.id) -SkipCertificateCheck).Content).ToLower() | ConvertFrom-Json
+        Write-Host "A" -NoNewline
+        $VerboseDeviceDetails = $PayloadCache[$Device.data.id]
+        if (-not $VerboseDeviceDetails) { #Check if download was unsuccessful. Write warning message and then skip to next
+            Write-Host "`rNo device data found for device $Device" -ForegroundColor Red
+            continue 
         }
         $DeviceId = $HubIPaddress + "-" + $Device.data.id
         $DeviceURL = $HubIPaddress + "/device/edit/" + $Device.data.id
@@ -416,7 +644,7 @@ function ScanDevice { #Called from ScanForData to query each found device for da
         }
 
         if ($Device.children.count -ge 1) {
-            foreach ($Child in $Device.children) {ScanDevice $Child $HubIPaddress}
+            ScanDevice $Device.children $HubIPaddress
             $Children = foreach ($ChildID in $Device.children.data.id){$HubIPaddress + "-" + $ChildID}
         }
 
@@ -1226,7 +1454,7 @@ function RunANewScanMenu { #Displays the Run a new scan menu
                 Write-Host
             }
             $Subnet = ($ComputerIPaddresses -split "\.")[0]+"."+($ComputerIPaddresses -split "\.")[1]+"."+($ComputerIPaddresses -split "\.")[2]+"."
-            $IPaddressesToScan = for ($i=0;$i -lt 256;$i++) {$address = $Subnet + $i;if ($address -ne $ComputerIPaddresses){$address}}
+            $IPaddressesToScan = for ($i=0;$i -lt 255;$i++) {$address = $Subnet + $i;if ($address -ne $ComputerIPaddresses){$address}}
             ScanForData -HubIPAddressList $IPaddressesToScan
             PauseHEDevicesToolKit
             Break
