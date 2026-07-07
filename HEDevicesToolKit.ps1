@@ -220,6 +220,10 @@
   Hubitat Elevation platform version 2.3.9 or newer
   
   ---Release Notes---
+  2026.07.07.1936
+  Fixed a bug that snuck in during the last release and affected apps discovery during a
+  re-scan in the program.
+  
   2026.06.28.1334
   Optimised the web calls to the HE hubs to reduce the time it takes to scan for devices.
   Web calls are now done in parallel which significantly reduces the time it takes (requires
@@ -262,7 +266,7 @@ param (
     [switch]$SearchForHubMeshDeviceByName,
     [string]$SearchTerm
 )
-$Version = "2026.06.28.1334"
+$Version = "2026.07.07.1936"
 
 function ScanForData { #Takes an array of hub IP addresses as the input and forwards them to the correct function.
     param (
@@ -464,7 +468,7 @@ function ScanForDataModern { #For PowerShell versions 7 and newer. Takes an arra
 
         # Merge Apps mapped by this hub into staging
         foreach ($AppID in $Result.Apps.Keys) {
-            if (-not $script:DataHashTable.apps.$AppID) {
+            if (-not $StagingTable.apps.$AppID) {
                 $StagingTable.apps.Add($AppID, $Result.Apps[$AppID])
             }
         }
@@ -2406,6 +2410,7 @@ function MainMenu { #Displays the main menu
     WriteTopOfPage "main menu"
     Write-Host ("Hubs: {0}" -f $($script:DataHashTable.hubs.count)) 
     Write-Host ("Devices: {0}" -f $($script:DataHashTable.devices.count))
+    Write-Host ("Apps in use: {0}" -f $($script:DataHashTable.apps.count))
     if ($script:DataHashTable.config.deviceListLastUpdated){Write-Host ("Data last updated: {0}" -f (Get-Date $($script:DataHashTable.config.deviceListLastUpdated) -Format $script:DataHashTable.config.dateTimeFormat))}
     Write-Host ("Output device(s): $(($script:DataHashTable.config.outputDevice.psobject.properties | Where-Object {$_.Value} | ForEach-Object {$_.Name}) -join ", ")")
     Write-Host
