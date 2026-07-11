@@ -34,9 +34,13 @@
   * Inactive devices - Checks to see if the last activity recorded for a device is older than
     than the set threshold (user configurable).
   * Offline devices - Checks for devices that are reported as being offline.
-  * Not in use devices - Checks for devices that are not in use.
+  * Not in use devices - Checks for devices that are not in use. This display excludes child
+    devices, but if a child device is in use, this status is inherited by its parent, so the
+    parent will be marked as in use (even though the parent device may not in itself be in use).
   * Hub Mesh - Orphaned remote devices - Checks all Hub Mesh devices to identify any remote 
     devices that have been orphaned by the source device having been removed.
+  * Hub Mesh - Parent/child status mismatch - Checks if the hub mesh 'on'/'off' status differs
+    between the parent and its children devices.
   * Hub Mesh - Hub Mesh disabled on source device - Checks all Hub Mesh devices for source
     devices that have been disabled but still have remote devices on other hubs.
   * Hub Mesh - No remote devices - Checks all Hub Mesh devices to identify any source devices
@@ -220,9 +224,19 @@
   Hubitat Elevation platform version 2.3.9 or newer
   
   ---Release Notes---
+  2026.07.11.1445
+  Changed the logic for determining if a device is in use. Child devices are not displayed in the
+  output, but their in use status is now considered when determining whether or not the parent is
+  in use. If any of the children are in use, the parent will be marked as in use as well, even if
+  the parent isn't directly in use by anything.
+  Added new device issue check for hub mesh parent/child status mismatch.
+  Found and corrected a spelling mistake of a variable which affected certain indentation 
+  scenarios in the output to screen and HTML.
+  Modified the Invoke-WebRequest calls to use basic parsing.
+  
   2026.07.07.1936
-  Fixed a bug that snuck in during the last release and affected apps discovery during a
-  re-scan in the program.
+  Fixed a bug that snuck in during the last release and affected apps discovery during a re-scan
+  in the program.
   
   2026.06.28.1334
   Optimised the web calls to the HE hubs to reduce the time it takes to scan for devices.
@@ -232,8 +246,8 @@
 
   2026.06.27.1824
   At some stage between Hubitat firmware versions 2.4.x and 2.5.0, the port number was 
-  included in the URL returned in the 'remoteDeviceUrl' property. Modified the code to remove
-  the port number if it was found.
+  included in the URL returned in the 'remoteDeviceUrl' property. Modified the code to remove the
+  port number if it was found.
   Added device issue check for devices that are not in use.
   Added a 'Rescan' option to the main menu. 
   Grouped devices by hubs and then sorted them by name in the device issues output for easier
@@ -266,7 +280,7 @@ param (
     [switch]$SearchForHubMeshDeviceByName,
     [string]$SearchTerm
 )
-$Version = "2026.07.07.1936"
+$Version = "2026.07.11.1334"
 
 function ScanForData { #Takes an array of hub IP addresses as the input and forwards them to the correct function.
     param (
@@ -307,9 +321,9 @@ function ScanForDataLegacy { #For PowerShell versions 5 and 6. Takes an array of
                 }
                 $ValidHEAddressFound = $true
                 if ($script:PowerShellVersion -eq 5) {
-                    $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json")).Content | ConvertFrom-Json
+                    $HubDetails = (Invoke-WebRequest -UseBasicParsing -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json")).Content | ConvertFrom-Json
                 } else {
-                    $HubDetails = (Invoke-WebRequest -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json") -SkipCertificateCheck).Content | ConvertFrom-Json
+                    $HubDetails = (Invoke-WebRequest -UseBasicParsing -Uri ($script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub/details/json") -SkipCertificateCheck).Content | ConvertFrom-Json
                 }
                 
                 $script:DataHashTable.hubs.Add($ValidatedAddress,[ordered]@{    hubName = $HubDetails.hubName
@@ -322,9 +336,9 @@ function ScanForDataLegacy { #For PowerShell versions 5 and 6. Takes an array of
                 Write-Host ("{0} found. (D)ownloading and (A)nalysing device data." -f ($HubDetails.hubName))
                 $URL = $script:DataHashTable.config.internetProtocol + $ValidatedAddress + "/hub2/devicesList"
                 if ($script:PowerShellVersion -eq 5) {
-                    ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL).Content).devices) $ValidatedAddress
+                    ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -UseBasicParsing -Uri $URL).Content).devices) $ValidatedAddress
                 } else {
-                    ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -Uri $URL -SkipCertificateCheck).Content).devices) $ValidatedAddress
+                    ScanDevice ((ConvertFrom-Json (Invoke-WebRequest -UseBasicParsing -Uri $URL -SkipCertificateCheck).Content).devices) $ValidatedAddress
                 }
                 Write-Host 
                 $script:DataHashTable.config.deviceListLastUpdated = (Get-Date).DateTime
@@ -411,7 +425,7 @@ function ScanForDataModern { #For PowerShell versions 7 and newer. Takes an arra
         # Fetch Hub Details
         $HubDetailsUrl = $using:Protocol + $ValidatedAddress + "/hub/details/json"
         try {
-            $HubDetails = (Invoke-WebRequest -Uri $HubDetailsUrl -SkipCertificateCheck -TimeoutSec 10).Content | ConvertFrom-Json
+            $HubDetails = (Invoke-WebRequest -UseBasicParsing -Uri $HubDetailsUrl -SkipCertificateCheck -TimeoutSec 10).Content | ConvertFrom-Json
             $LocalHubData.HubDetails = $HubDetails
             Write-Host ("{0} found at {1}. (D)ownloading and (A)nalysing device data." -f ($HubDetails.hubName,$ValidatedAddress))
         } catch {
@@ -431,7 +445,7 @@ function ScanForDataModern { #For PowerShell versions 7 and newer. Takes an arra
         # Fetch Master Device List for this Hub
         $DevicesUrl = $using:Protocol + $ValidatedAddress + "/hub2/devicesList"
         try {
-            $DeviceListPayload = (ConvertFrom-Json (Invoke-WebRequest -Uri $DevicesUrl -SkipCertificateCheck -TimeoutSec 15).Content).devices
+            $DeviceListPayload = (ConvertFrom-Json (Invoke-WebRequest -UseBasicParsing -Uri $DevicesUrl -SkipCertificateCheck -TimeoutSec 15).Content).devices
             ScanDevice $DeviceListPayload $ValidatedAddress
             
         } catch {
@@ -530,7 +544,7 @@ function ScanDevice { #Called from ScanForData to query each found device for da
             $ID = $_.data.id
             $URL = $using:URLBase + $ID
             try {
-                $Content = (Invoke-WebRequest -Uri $URL -SkipCertificateCheck -TimeoutSec 10).Content
+                $Content = (Invoke-WebRequest -UseBasicParsing -Uri $URL -SkipCertificateCheck -TimeoutSec 10).Content
                 # Return a clean key/value pair object to the main thread
                 [PSCustomObject]@{ ID = $ID; 
                                    Json = $Content.ToLower() | ConvertFrom-Json 
@@ -547,9 +561,9 @@ function ScanDevice { #Called from ScanForData to query each found device for da
             $URL = $URLBase + $ID
             try {
                 if ($script:PowerShellVersion -eq 5) {
-                    $Content = (Invoke-WebRequest -Uri $URL -TimeoutSec 10).Content
+                    $Content = (Invoke-WebRequest -UseBasicParsing -Uri $URL -TimeoutSec 10).Content
                 } else {
-                    $Content = (Invoke-WebRequest -Uri $URL -SkipCertificateCheck -TimeoutSec 10).Content
+                    $Content = (Invoke-WebRequest -UseBasicParsing -Uri $URL -SkipCertificateCheck -TimeoutSec 10).Content
                 }
                 # Return a clean key/value pair object to the main thread
                 [PSCustomObject]@{ ID = $ID; 
@@ -1325,7 +1339,7 @@ function EraseConfigurationSettingsAndSetDefaults { #Erases all config settings 
     $script:DataHashTable.config.filePath.Add("HubMeshDeviceListHTML",$script:DefaultFilePathHubMeshDeviceListHTML)
     $script:DataHashTable.config.filePath.Add("HubMeshDeviceListCSV",$script:DefaultFilePathHubMeshDeviceListCSV)
     $script:DataHashTable.config.sendWebCallOnIssue = [ordered]@{}
-    $script:DataHashTable.config.sendWebCallOnIssue.Add("categories",@("lowBattery","inactiveDevices","offlineDevices","notInUseDevices","hubMesh_orphanedDevices","hubMesh_disabledOnSourceDevice","hubMesh_noRemoteDevice"))
+    $script:DataHashTable.config.sendWebCallOnIssue.Add("categories",@("lowBattery","inactiveDevices","offlineDevices","notInUseDevices","hubMesh_orphanedDevices","hubMesh_parentChildStatusMismatch","hubMesh_disabledOnSourceDevice","hubMesh_noRemoteDevice"))
     $script:DataHashTable.config.sendWebCallOnIssue.Add("globalWebCallURLStatus",$script:DefaultGlobalWebCallURLStatus)
     $script:DataHashTable.config.sendWebCallOnIssue.Add("status",$script:DefaultSendWebCallOnIssueStatus)
     foreach ($Category in $script:DataHashTable.config.sendWebCallOnIssue.categories) {
@@ -1555,6 +1569,7 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
         [switch]$NoSendWebCallFunction #Prevents the sendWebCallFunction from executing
     )
     if ($DeviceIDList.count -ge 1) {
+        $DiscoveredDevices = @{}
         $script:DevicesWithIssuesFound = @{}
         $script:DevicesWithIssuesHidden = @{}
         foreach ($IssueCategory in $script:DataHashTable.config.sendWebCallOnIssue.categories) {
@@ -1564,7 +1579,13 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
         
         ##### Run through the device list provided and check for general issues #####
         foreach ($DeviceID in $DeviceIDList) {
+            if (-NOT $DiscoveredDevices.ContainsKey($DeviceID)) { #If this deviceID hasn't already been discovered, then create the key
+                $DiscoveredDevices[$DeviceID] = @{}
+            }
             if ($script:DataHashTable.devices.$DeviceID.deviceName) { #Check that the device has a name first. A device without a name happens when a source hubmesh device has been removed but one or more remote devices remain
+                
+                $DiscoveredDevices[$DeviceID].isRoot = $script:DataHashTable.devices.$DeviceID.parent -eq $true -OR ($script:DataHashTable.devices.$DeviceID.child -eq $false -AND $null -eq $script:DataHashTable.devices.$DeviceID.parentDeviceID) #Determine if the device is a root device (a single device, or a device that has children)
+                
                 if (($script:DataHashTable.devices.$DeviceID.deviceName).ToLower() -like "offline*") { #Check if the device is offline
                     if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.offlineDevices) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category   
                         $script:DevicesWithIssuesFound[$DeviceID] += @{offlineDevices = $true}
@@ -1572,31 +1593,46 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                         $script:DevicesWithIssuesHidden.offlineDevices ++
                     }
                 }
-                if (($script:DataHashTable.devices.$DeviceID.inUseBy).count -eq 0 -AND $script:DataHashTable.devices.$DeviceID.child -eq $false) { #Check to see if the device is unused and is not a child device
-                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.notInUseDevices) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category   
-                        $script:DevicesWithIssuesFound[$DeviceID] += @{notInUseDevices = $true}
-                    } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                        $script:DevicesWithIssuesHidden.notInUseDevices ++
-                    }
-                }
-            }
-            if ($script:DataHashTable.devices.$DeviceID.batteryCharge -AND $script:DataHashTable.devices.$DeviceID.linked -eq $false){ #Check if a battery charge value is recorded for the device but don't check devices that are remote Hub Mesh devices
-                if ([int]$script:DataHashTable.devices.$DeviceID.batteryCharge -lt $script:DataHashTable.config.lowBatteryChargeThreshold) { #Check if the battery charge is less than the threshold
-                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.lowBattery) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category 
-                        $script:DevicesWithIssuesFound[$DeviceID] += @{lowBattery = $true}
-                    } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                        $script:DevicesWithIssuesHidden.lowBattery ++
-                    }
-                }
-            }
-            if ($script:DataHashTable.devices.$DeviceID.wirelessProtocol) { #Check if device is running either Zigbee, ZWave or Matter
-                if ($script:DataHashTable.devices.$DeviceID.lastActivity) { #Check if last activity is recorded for the device
-                    if ((Get-Date ($script:DataHashTable.devices.$DeviceID.lastActivity)) -lt $InactiveDeviceTime) { #Check if the last activity timestamp is older than the threshold
-                        if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.inactiveDevices) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category
-                            $script:DevicesWithIssuesFound[$DeviceID] += @{inactiveDevices = $true}
-                        } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                            $script:DevicesWithIssuesHidden.inactiveDevices ++
+                if (($script:DataHashTable.devices.$DeviceID.inUseBy).count -ge 1) { #Check to see if the device is in use
+                    $DiscoveredDevices[$DeviceID].isInUse = $true
+                    if ($script:DataHashTable.devices.$DeviceID.child -eq $true) { #If the device is a child device
+                        if (-NOT $DiscoveredDevices.ContainsKey($script:DataHashTable.devices[$DeviceID].parentDeviceID)) { #If the parent has not been discovered yet, create it
+                            $DiscoveredDevices[$script:DataHashTable.devices[$DeviceID].parentDeviceID] = @{}
                         }
+                        $DiscoveredDevices[$script:DataHashTable.devices[$DeviceID].parentDeviceID].isInUse = $true
+                    }
+                } else {
+                    if (-NOT $DiscoveredDevices[$DeviceID].ContainsKey("isInUse")) {
+                        $DiscoveredDevices[$DeviceID].isInUse = $false
+                    }
+                }
+                    
+                if ($script:DataHashTable.devices.$DeviceID.batteryCharge -AND $script:DataHashTable.devices.$DeviceID.linked -eq $false){ #Check if a battery charge value is recorded for the device but don't check devices that are remote Hub Mesh devices
+                    if ([int]$script:DataHashTable.devices.$DeviceID.batteryCharge -lt $script:DataHashTable.config.lowBatteryChargeThreshold) { #Check if the battery charge is less than the threshold
+                        if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.lowBattery) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category 
+                            $script:DevicesWithIssuesFound[$DeviceID] += @{lowBattery = $true}
+                        } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                            $script:DevicesWithIssuesHidden.lowBattery ++
+                        }
+                    }
+                }
+                if ($script:DataHashTable.devices.$DeviceID.wirelessProtocol) { #Check if device is running either Zigbee, ZWave or Matter
+                    if ($script:DataHashTable.devices.$DeviceID.lastActivity) { #Check if last activity is recorded for the device
+                        if ((Get-Date ($script:DataHashTable.devices.$DeviceID.lastActivity)) -lt $InactiveDeviceTime) { #Check if the last activity timestamp is older than the threshold
+                            if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.inactiveDevices) -notcontains $DeviceID) { #Check that the device hasn't been excluded from issue category
+                                $script:DevicesWithIssuesFound[$DeviceID] += @{inactiveDevices = $true}
+                            } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                                $script:DevicesWithIssuesHidden.inactiveDevices ++
+                            }
+                        }
+                    }
+                }
+                ##### Check for parent/child status mismatches #####
+                if ($script:DataHashTable.devices.$DeviceID.child -eq $true -AND $script:DataHashTable.devices.$DeviceID.hubMeshEnabled -ne $script:DataHashTable.devices[$script:DataHashTable.devices.$DeviceID.parentDeviceID].hubMeshEnabled){ #Check if the device is a child and if hub mesh status differs between parent and child
+                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.hubMesh_parentChildStatusMismatch) -contains $DeviceID) { #Check if the device has been excluded from issue category
+                        $script:DevicesWithIssuesHidden.hubMesh_parentChildStatusMismatch ++ #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                    } else { 
+                        $script:DevicesWithIssuesFound[$DeviceID] += @{hubMesh_parentChildStatusMismatch = $script:DataHashTable.devices.$DeviceID.parentDeviceID}
                     }
                 }
             }
@@ -1627,31 +1663,44 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                         $script:DevicesWithIssuesHidden.offlineDevices ++
                     }
                 }
-            }
             
-            if (-NOT $script:DataHashTable.hubMeshSourceDevices.$HubMeshSourceDeviceID) { #No remote devices detected. Hub mesh can be disabled on the source device
-                if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.hubMesh_noRemoteDevice) -notcontains $HubMeshSourceDeviceID) { #Check that the device hasn't been excluded from issue category
-                    $script:DevicesWithIssuesFound[$HubMeshSourceDeviceID] += @{hubMesh_noRemoteDevice = $true}
-                } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                    $script:DevicesWithIssuesHidden.hubMesh_noRemoteDevice ++
-                }
-            } else { #Remote devices detected.
-                if ($script:DataHashTable.devices.$HubMeshSourceDeviceID.hubMeshEnabled -eq $false) { #Remote device exists, but hub mesh is disabled on the source device
-                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.hubMesh_disabledOnSourceDevice) -notcontains $HubMeshSourceDeviceID) { #Check that the device hasn't been excluded from issue category
-                        $script:DevicesWithIssuesFound[$HubMeshSourceDeviceID] += @{hubMesh_disabledOnSourceDevice = $true}
+                if (-NOT $script:DataHashTable.hubMeshSourceDevices.$HubMeshSourceDeviceID) { #No remote devices detected. Hub mesh can be disabled on the source device
+                    if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.hubMesh_noRemoteDevice) -notcontains $HubMeshSourceDeviceID) { #Check that the device hasn't been excluded from issue category
+                        $script:DevicesWithIssuesFound[$HubMeshSourceDeviceID] += @{hubMesh_noRemoteDevice = $true}
                     } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                        $script:DevicesWithIssuesHidden.hubMesh_disabledOnSourceDevice ++
+                        $script:DevicesWithIssuesHidden.hubMesh_noRemoteDevice ++
                     }
-                }
-                foreach ($RemoteDeviceID in $script:DataHashTable.hubMeshSourceDevices.$HubMeshSourceDeviceID) {
-                    if (($script:DataHashTable.devices.$RemoteDeviceID.deviceName).ToLower() -like "offline*" -AND $script:DevicesWithIssuesFound[$RemoteDeviceID].offlineDevices -eq $false) { #Check if the remote device is offline and issue hasn't already been logged
-                        if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.offlineDevices) -notcontains $RemoteDeviceID) { #Check that the device hasn't been excluded from issue category
-                            $script:DevicesWithIssuesFound[$RemoteDeviceID] += @{offlineDevices = $true}
+                } else { #Remote devices detected.
+                    if ($script:DataHashTable.devices.$HubMeshSourceDeviceID.hubMeshEnabled -eq $false) { #Remote device exists, but hub mesh is disabled on the source device
+                        if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.hubMesh_disabledOnSourceDevice) -notcontains $HubMeshSourceDeviceID) { #Check that the device hasn't been excluded from issue category
+                            $script:DevicesWithIssuesFound[$HubMeshSourceDeviceID] += @{hubMesh_disabledOnSourceDevice = $true}
                         } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
-                            $script:DevicesWithIssuesHidden.offlineDevices ++
+                            $script:DevicesWithIssuesHidden.hubMesh_disabledOnSourceDevice ++
+                        }
+                    }
+                    foreach ($RemoteDeviceID in $script:DataHashTable.hubMeshSourceDevices.$HubMeshSourceDeviceID) {
+                        if (($script:DataHashTable.devices.$RemoteDeviceID.deviceName).ToLower() -like "offline*" -AND $script:DevicesWithIssuesFound[$RemoteDeviceID].offlineDevices -eq $false) { #Check if the remote device is offline and issue hasn't already been logged
+                            if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.offlineDevices) -notcontains $RemoteDeviceID) { #Check that the device hasn't been excluded from issue category
+                                $script:DevicesWithIssuesFound[$RemoteDeviceID] += @{offlineDevices = $true}
+                            } else { #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                                $script:DevicesWithIssuesHidden.offlineDevices ++
+                            }
                         }
                     }
                 }
+            }
+        }
+
+        ##### Check for not in use devices (excludes child devices) #####
+        foreach ($rootDeviceID in $DiscoveredDevices.Keys.Where({ $DiscoveredDevices[$_].isRoot -eq $true -AND $DiscoveredDevices[$_].isInUse -eq $false})) { #Check if the device is a root device but not in use (which in this case also means that none of any potential child devices are in use either)
+            if (($script:DataHashTable.config.excludedDevicesFromIssuesReporting.notInUseDevices) -contains $rootDeviceID) { #Check if the device has been excluded from issue category   
+                #Device is excluded from issue category - add 1 to the tally of devices hidden from display
+                $script:DevicesWithIssuesHidden.notInUseDevices ++
+            } else {
+                if (-NOT $script:DevicesWithIssuesFound.ContainsKey($rootDeviceID)) {
+                    $script:DevicesWithIssuesFound[$rootDeviceID] = @{}
+                }
+                $script:DevicesWithIssuesFound[$rootDeviceID] += @{notInUseDevices = $true}
             }
         }
 
@@ -1673,10 +1722,10 @@ function DetectIssuesWithDevices { #Runs through a list of checks against the su
                         try {
                             if ($script:PowerShellVersion -eq 5) {
                                 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = [SSLHandler]::GetSSLHandler() #Ignore all SSL cert issues
-                                $null = Invoke-WebRequest -Uri $WebCallURL -TimeoutSec 5 -ErrorAction SilentlyContinue
+                                $null = Invoke-WebRequest -UseBasicParsing -Uri $WebCallURL -TimeoutSec 5 -ErrorAction SilentlyContinue
                                 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = $null #Stop ignoring SSL cert issues
                             } else {
-                                $null = Invoke-WebRequest -Uri $WebCallURL -TimeoutSec 5  -SkipCertificateCheck -ErrorAction SilentlyContinue
+                                $null = Invoke-WebRequest -UseBasicParsing -Uri $WebCallURL -TimeoutSec 5  -SkipCertificateCheck -ErrorAction SilentlyContinue
                             }
                         }
                         catch {
@@ -1701,11 +1750,11 @@ function GenerateOutput { #Returns the HTML code for creating an HTML table with
     $MaxTextWidthOfIndentationColumn = 4
 
     $IndentationLevel = 0
-    if ($DeviceDataHashTable.settings.identationLevel) {
-        switch ($DeviceDataHashTable.settings.identationLevel) {
+    if ($DeviceDataHashTable.settings.indentationLevel) {
+        switch ($DeviceDataHashTable.settings.indentationLevel) {
             {$_ -lt 0} {$IndentationLevel=0;break}
             {$_ -gt 3} {$IndentationLevel=3;break}
-            default {$IndentationLevel=$DeviceDataHashTable.settings.identationLevel}
+            default {$IndentationLevel=$DeviceDataHashTable.settings.indentationLevel}
         }
     }
     
@@ -1838,10 +1887,16 @@ function GenerateOutput { #Returns the HTML code for creating an HTML table with
                         $HTML += "<h4 class=`"listOfDevices`">"
                     }
                 }
+                if ($DeviceDataHashTable.$Classification.$LineItem.warning) {
+                    $HTML += "`n<span class=`"red`">"
+                }
                 if ($DeviceDataHashTable.$Classification.$LineItem.URL) {
                     $HTML += "<a href=`"$($DeviceDataHashTable.$Classification.$LineItem.URL)`" target=`"_blank`">$($DeviceDataHashTable.$Classification.$LineItem.displayValue)</a>"
                 } else {
                     $HTML += "$($DeviceDataHashTable.$Classification.$LineItem.displayValue)"
+                }
+                if ($DeviceDataHashTable.$Classification.$LineItem.warning) {
+                    $HTML += "</span>"
                 }
                 if ($script:DataHashTable.config.outputDevice.screen){
                     if ($DeviceDataHashTable.$Classification.$LineItem.warning){
@@ -1919,9 +1974,11 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
             $CategoryText["offlineDevices"] = @{title="OFFLINE DEVICES"
                                                             text="An offline device is a device that HE no longer can contact. It could for example be a Hub Mesh remote device where Hub Mesh has been disabled on the source device, leading to the remote device going offline. It could also be a LAN device that has been disconnected from the network or it has received a new IP address and is no longer accessible on the original IP address.","The following offline devices were detected:"}
             $CategoryText["notInUseDevices"] = @{title="NOT IN USE DEVICES"
-                                                            text="A not in use device is a device that is not in use by anything on that particular hub. It's not an issue per se, but it is a device that appears surplus to requirements and is using system resources, especially if it is a remote hub mesh device.","The following not in use devices were detected:"}
+                                                            text="A not in use device is a device that is not in use by anything on that particular hub. It's not an issue per se, but it is a device that appears surplus to requirements and is using system resources, especially if it is a remote hub mesh device. Child devices are not included in this list, but if any child device is in use, its parent will be considered being in use even if the parent is not directly in use by anything.","The following not in use devices were detected:"}
             $CategoryText["hubMesh_orphanedDevices"] = @{title="HUB MESH - ORPHANED DEVICES"
                                                             text="An orphaned device is a Hub Mesh remote device whose source device has been removed.","Check first that all hubs in your Hub Mesh environment have been added to this program. This error is expected for each remote device of source devices that are installed on hubs that haven't been included.","If all hubs are accounted for, the only way to resolve this issue is to remove the orphaned device and replace it with a working device.","The following orphaned devices were detected:"}
+            $CategoryText["hubMesh_parentChildStatusMismatch"] = @{title="HUB MESH - PARENT/CHILD STATUS MISMATCH"
+                                                            text="A device which has a parent/child status mismatch is a device where the hub mesh 'on' or 'off' status on the parent device doesn't match the corresponding setting on the child devices.","If the status of Hub Mesh on the parent device is 'On', then quite often this mismatch issue can be resolved by rebooting the hub.","The following devices with a parent/child status mismatch were detected:"}
             $CategoryText["hubMesh_disabledOnSourceDevice"] = @{title="HUB MESH - HUB MESH DISABLED ON SOURCE DEVICE"
                                                             text="The problem with these devices is that Hub Mesh has been disabled on the source device even though remote devices exist. The remote devices will be offline and non-functional at this stage.","Resolve the issue by enabling Hub Mesh on the source device or removing the remote device.","The following devices with this issue were detected:"}
             $CategoryText["hubMesh_noRemoteDevice"] = @{title="HUB MESH - NO REMOTE DEVICES DETECTED"
@@ -1937,9 +1994,12 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
             
             $CategoriesWithIssuesFound = [ordered]@{}
             foreach ($IssueCategory in $script:DataHashTable.config.sendWebCallOnIssue.categories) {
-                $CategoriesWithIssuesFound[$IssueCategory] = $script:DevicesWithIssuesFound.keys | Where-Object {$script:DevicesWithIssuesFound[$_].$IssueCategory -eq $true}
+                $CategoriesWithIssuesFound[$IssueCategory] = $script:DevicesWithIssuesFound.keys.where({$script:DevicesWithIssuesFound[$_].ContainsKey($IssueCategory)})
             }    
-            foreach ($Category in ($CategoriesWithIssuesFound.keys | Where-Object {$CategoriesWithIssuesFound[$_].count -ge 1})) {
+            foreach ($Category in $CategoriesWithIssuesFound.keys.where({$CategoriesWithIssuesFound[$_].count -ge 1})) {
+                if ($Category -eq "hubMesh_parentChildStatusMismatch") {
+                    $MismatchedParentsFound = [System.Collections.Generic.List[string]]::new()
+                }
                 if ($script:DataHashTable.config.outputDevice.HTML) {
                     $HTML += "<div><h4 class=`"deviceIssues`">$($CategoryText[$Category].title)</h4></div>
                             <div><p style=`"margin-top: 0px;margin-bottom: 0px;`">"
@@ -1989,6 +2049,14 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                                                 sourceHub="Source Hub"
                                                 remoteDevices="Remote Devices"          
                         }
+                    } elseif ($Category -eq "hubMesh_parentChildStatusMismatch") {
+                        $CSVHeader = [ordered]@{parentDeviceName="Parent Device Name"
+                                                parentURL="Parent URL"
+                                                parentHub="Parent Hub"
+                                                parentHubMeshStatus="Parent Device Hub Mesh Status"
+                                                childDevices="Child Devices"
+                                                childDeviceHubMeshStatus="Child Device Hub Mesh Status"          
+                        }
                     }
                     #Print header
                     $i = 0
@@ -2002,8 +2070,15 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                     }
                     $CSVContent += "`n"
                 }
-                #foreach ($Device in $CategoriesWithIssuesFound[$Category]) {
+                
                 foreach ($Device in ($CategoriesWithIssuesFound[$Category] | Sort-Object { $script:DataHashTable.devices[$_].hubIPAddress },{ $script:DataHashTable.devices[$_].deviceName } )) {
+                    if ($Category -eq "hubMesh_parentChildStatusMismatch") {
+                        if ($MismatchedParentsFound -contains $script:DevicesWithIssuesFound[$Device].hubMesh_parentChildStatusMismatch) {
+                            continue
+                        } else {
+                            $MismatchedParentsFound.Add($script:DevicesWithIssuesFound[$Device].hubMesh_parentChildStatusMismatch)
+                        }
+                    }
                     if ($ExcludeDevicesMode) {
                         $NbrOfOptions ++
                         $HashTableOfDevicesWithIssues["$NbrOfOptions"] = @{deviceID=$Device
@@ -2091,7 +2166,7 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                             foreach ($RemoteDeviceID in $script:DataHashTable.hubMeshSourceDevices.$Device) {
                                 if ($script:DataHashTable.config.outputDevice.screen -OR $script:DataHashTable.config.outputDevice.HTML) {
                                     $HTML += GenerateOutput @{settings=@{useFieldDescriptions=$true
-                                                                         identationLevel=1}
+                                                                         indentationLevel=1}
                                                               one=@{     one=@{displayValue=$script:DataHashTable.devices.$RemoteDeviceID.deviceName
                                                                                displayName="Remote device"
                                                                                URL=($script:DataHashTable.config.internetProtocol + $script:DataHashTable.devices.$RemoteDeviceID.deviceURL)}
@@ -2103,6 +2178,55 @@ function WriteIssuesListToOutputDevice { #Sends the contents of the $DevicesWith
                                     $CSV.remoteDevices += $script:DataHashTable.devices.$RemoteDeviceID.deviceName + " (" + $RemoteID + " - " + ($script:DataHashTable.config.internetProtocol + $script:DataHashTable.devices.$RemoteDeviceID.deviceURL) + ") " + " on " + $script:DataHashTable.hubs.($script:DataHashTable.devices.$RemoteDeviceID.hubIPAddress).hubName
                                     if ($i -lt ($script:DataHashTable.hubMeshSourceDevices.$Device).count) {
                                         $CSV.remoteDevices += "`n"
+                                    }
+                                }
+                            }
+                            break
+                        }
+                        "hubMesh_parentChildStatusMismatch" {
+                            $ParentDeviceID = $script:DevicesWithIssuesFound[$Device].hubMesh_parentChildStatusMismatch
+                            $ParentHubMeshStatus = if($script:DataHashTable.devices[$ParentDeviceID].hubMeshEnabled -eq $true){"On"} else {"Off"}
+                            if ($script:DataHashTable.config.outputDevice.screen -OR $script:DataHashTable.config.outputDevice.HTML) {
+                                $HTML += GenerateOutput @{settings=@{useFieldDescriptions=$true}
+                                                          one=@{     one=@{displayValue=$script:DataHashTable.devices[$ParentDeviceID].deviceName
+                                                                           displayName="Parent device"
+                                                                           URL=($script:DataHashTable.config.internetProtocol + $script:DataHashTable.devices[$ParentDeviceID].deviceURL)}
+                                                                     two=@{displayValue=$script:DataHashTable.hubs.($script:DataHashTable.devices[$ParentDeviceID].hubIPAddress).hubName
+                                                                           displayName="Parent Hub"}
+                                                                     three=@{displayValue=$ParentHubMeshStatus
+                                                                           displayName="Parent Hub Mesh Status"
+                                                                           warning=$true}}}
+                            }
+                            if ($script:DataHashTable.config.outputDevice.CSV) {
+                                $i = 0
+                                $CSV = @{}
+                                $CSV.parentDeviceName=$script:DataHashTable.devices[$ParentDeviceID].deviceName
+                                $CSV.parentURL=($script:DataHashTable.config.internetProtocol + $script:DataHashTable.devices[$ParentDeviceID].deviceURL)
+                                $CSV.parentHub=$script:DataHashTable.hubs.($script:DataHashTable.devices[$ParentDeviceID].hubIPAddress).hubName
+                                $CSV.parentHubMeshStatus=$ParentHubMeshStatus      
+                            }
+                            $ChildDeviceIDList = $script:DevicesWithIssuesFound.Keys.where({$script:DevicesWithIssuesFound[$_].ContainsKey("hubMesh_parentChildStatusMismatch") -AND $script:DevicesWithIssuesFound[$_].hubMesh_parentChildStatusMismatch -eq $ParentDeviceID})
+                            foreach ($ChildDeviceID in $ChildDeviceIDList) {
+                                $ChildHubMeshStatus = if($script:DataHashTable.devices[$ChildDeviceID].hubMeshEnabled -eq $true){"On"} else {"Off"}
+                                if ($script:DataHashTable.config.outputDevice.screen -OR $script:DataHashTable.config.outputDevice.HTML) {
+                                    $HTML += GenerateOutput @{settings=@{useFieldDescriptions=$true
+                                                                         indentationLevel=1}
+                                                              one=@{     one=@{displayValue=$script:DataHashTable.devices.$ChildDeviceID.deviceName
+                                                                               displayName="Child device"
+                                                                               URL=($script:DataHashTable.config.internetProtocol + $script:DataHashTable.devices.$ChildDeviceID.deviceURL)}
+                                                                         two=@{displayValue=$ChildHubMeshStatus
+                                                                               displayName="Child Hub Mesh Status"
+                                                                               warning=$true}}}
+                                }
+                                if ($script:DataHashTable.config.outputDevice.CSV) {
+                                    $i++
+                                    $CSV.childDevices += $script:DataHashTable.devices.$ChildDeviceID.deviceName + " (" + ($script:DataHashTable.config.internetProtocol + $script:DataHashTable.devices.$ChildDeviceID.deviceURL) + ") "
+                                    if ($i -lt ($ChildDeviceIDList.count)) {
+                                        $CSV.childDevices += "`n"
+                                    }
+                                    $CSV.childDeviceHubMeshStatus += $ChildHubMeshStatus
+                                    if ($i -lt ($ChildDeviceIDList.count)) {
+                                        $CSV.childDeviceHubMeshStatus += "`n"
                                     }
                                 }
                             }
@@ -3187,9 +3311,9 @@ function SetHTMLFooter { #Returns the HTML code for the end of the HTML file
     $HTML
 }
 
-$FilePath = (Split-Path ($MyInvocation.MyCommand.Path) -Parent)
-$DataJSONFilePath = $FilePath + "\Data.json"
-$HubListFilePath = $FilePath + "\hubs.txt"
+$FilePath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$DataJSONFilePath = Join-Path $FilePath "Data.json"
+$HubListFilePath = Join-Path $FilePath "hubs.txt"
 $PowerShellVersion = $PSVersionTable.PSVersion.major
 
 $DefaultAutoLaunchWebBrowser = $false
